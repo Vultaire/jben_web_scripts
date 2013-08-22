@@ -2,6 +2,13 @@
  J-Ben Web Scripts
 ===================
 
+This repository contains scripts used during the writing of J-Ben Web.
+They are shared in hopes others may find them useful, but with no
+warranty, implied or otherwise.
+
+These scripts, unless otherwise noted, are licensed under the 3-clause
+BSD license.  The full text is available in LICENSE.txt.
+
 parse_dict_latin1.py
 ====================
 
