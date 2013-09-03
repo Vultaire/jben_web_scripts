@@ -64,14 +64,14 @@ class FirstPassContentHandler(xml.sax.handler.ContentHandler):
         self.stack.append("")
         for k, v in attrs.items():
             self.attr_len_d.setdefault(name, {})
-            self.attr_len_d[name][k] = max(len(v) * 4, self.attr_len_d[name].get(k, 0))
+            self.attr_len_d[name][k] = max(len(v.encode("utf-8")), self.attr_len_d[name].get(k, 0))
 
     def endElement(self, name):
         data = self.stack.pop()
         # Again, not doing anything for docroot, so only do something
         # if docroot is still on the stack.
         if len(self.stack) > 0:
-            self.elem_len_d[name] = max(len(data) * 4, self.elem_len_d.get(name, 0))
+            self.elem_len_d[name] = max(len(data.encode("utf-8")), self.elem_len_d.get(name, 0))
 
     def characters(self, content):
         self.stack[-1] += content.strip()
@@ -137,7 +137,7 @@ class ContentHandler(xml.sax.handler.ContentHandler):
             for key, value in attrs.items():
                 key = key.replace(":", "_")
                 cols.append(key)
-                vals.append(value.encode('utf-8'))
+                vals.append(value.encode("utf-8"))
             cols = ", ".join(cols)
             val_template = ", ".join(["%s" for val in vals])
             query = "INSERT INTO `{0}` ({1}) VALUES ({2});".format(name, cols, val_template)
@@ -154,7 +154,7 @@ class ContentHandler(xml.sax.handler.ContentHandler):
         if len(record["_data"]) > 0:
             query = "UPDATE `{0}` SET DATA=%s WHERE ID=%s".format(name)
             try:
-                self.cursor.execute(query, (record["_data"].encode('utf-8'), record["_id"]))
+                self.cursor.execute(query, (record["_data"].encode("utf-8"), record["_id"]))
             except:
                 print query, (record["_data"], record["_id"])
                 raise
