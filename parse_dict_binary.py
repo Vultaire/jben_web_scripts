@@ -15,6 +15,21 @@ import xml.sax.handler
 import xml.sax.xmlreader
 
 
+# Custom expat parser...
+from xml.sax.expatreader import ExpatParser
+
+class ExpatParserNoEntityExp(ExpatParser):
+
+    """An overridden Expat parser class which disables entity expansion."""
+
+    def reset(self):
+        ExpatParser.reset(self)
+        self._parser.DefaultHandler = self.dummy_handler
+
+    def dummy_handler(self, *args, **kwargs):
+        pass
+
+
 class FirstPassContentHandler(xml.sax.handler.ContentHandler):
 
     """Purpose: to identify required lengths of data and attributes for each table."""
@@ -190,7 +205,7 @@ def parse_file(filename, db_name, user, commit_interval, passwd=None):
         try:
             init_db(conn, db_name)
             switch_to_db(conn, db_name)
-            reader = xml.sax.make_parser()  # Creates ExpatParser instance
+            reader = xml.sax.make_parser(["ExpatParserNoEntityExp"])
             reader.setContentHandler(FirstPassContentHandler(conn))
             reader.parse(infile)
             infile.seek(0)
