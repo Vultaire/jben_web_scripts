@@ -159,7 +159,7 @@ class ContentHandler(xml.sax.handler.ContentHandler):
                 print query, (record["_data"], record["_id"])
                 raise
         if len(self.stack) == 1:
-            json_blob = json.dumps(record, indent=4, sort_keys=True)
+            json_blob = json.dumps(record)
             query = "UPDATE `{0}` SET json=%s WHERE ID=%s".format(name)
             try:
                 self.cursor.execute(query, (json_blob, record["_id"]))
