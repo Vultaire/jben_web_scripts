@@ -8,20 +8,11 @@ not.
 
 import sys
 import gzip
-import pprint
+import json
 
 import xml.sax
 import xml.sax.handler
 import xml.sax.xmlreader
-from xml.parsers import expat
-
-
-from xml.sax.expatreader import ExpatParser
-
-class CustomExpatParser(ExpatParser):
-    def reset(self):
-        ExpatParser.reset(self)
-        self._parser.SetParamEntityParsing(expat.XML_PARAM_ENTITY_PARSING_NEVER)
 
 
 class FirstPassContentHandler(xml.sax.handler.ContentHandler):
@@ -70,8 +61,10 @@ class FirstPassContentHandler(xml.sax.handler.ContentHandler):
                 cols = ["id INTEGER AUTO_INCREMENT PRIMARY KEY"]
                 if elem in self.fk_needed:
                     cols.append("fk INTEGER")
+                else:
+                    cols.append("json MEDIUMBLOB")
                 if data_len > 0:
-                    cols.append("data VARBINARY({0})".format(data_len))  # Need +1...?
+                    cols.append("data VARBINARY({0})".format(data_len))
                 attr_d = self.attr_len_d.get(elem, {})
                 for attr, data_len in sorted(attr_d.iteritems()):
                     attr = attr.replace(":", "_")
@@ -111,7 +104,7 @@ class ContentHandler(xml.sax.handler.ContentHandler):
         else:
             cols = []
             vals = []
-            fk = self.stack[-1]["id"]
+            fk = self.stack[-1]["_id"]
             if fk is not None:  # Parent is JMdict, which we ignore...
                 cols.append("fk")
                 vals.append(fk)
@@ -128,28 +121,34 @@ class ContentHandler(xml.sax.handler.ContentHandler):
                 print query, vals
                 raise
             _id = self.cursor.lastrowid
-        self.stack.append({"id": _id, "name": name, "attrs": dict(attrs), "data": "", "children": []})
+        self.stack.append({"_id": _id, "_attrs": dict(attrs), "_data": ""})
 
     def endElement(self, name):
         record = self.stack.pop()
-        if len(record["data"]) > 0:
+        if len(record["_data"]) > 0:
             query = "UPDATE `{0}` SET DATA=%s WHERE ID=%s".format(name)
             try:
-                self.cursor.execute(query, (record["data"].encode('utf-8'), record["id"]))
+                self.cursor.execute(query, (record["_data"].encode('utf-8'), record["_id"]))
             except:
-                print query, (record["data"], record["id"])
+                print query, (record["_data"], record["_id"])
                 raise
-        print "Data:\n{0}".format(pprint.pformat(record))
-        if len(self.stack) <= 1:
+        if len(self.stack) == 1:
+            json_blob = json.dumps(record, indent=4, sort_keys=True)
+            query = "UPDATE `{0}` SET json=%s WHERE ID=%s".format(name)
+            try:
+                self.cursor.execute(query, (json_blob, record["_id"]))
+            except:
+                print query, (record["_data"], record["_id"])
+                raise
             self.count += 1
             if self.count % self.commit_interval == 0:
                 print "Count: {0}, committing...".format(self.count)
                 self.conn.commit()
-        else:
-            self.stack[-1]["children"].append(record)
+        elif len(self.stack) > 1:
+            self.stack[-1].setdefault(name, []).append(record)
 
     def characters(self, content):
-        self.stack[-1]["data"] = self.stack[-1]["data"] + content.strip()
+        self.stack[-1]["_data"] = self.stack[-1]["_data"] + content.strip()
 
     def endDocument(self):
         print "Final commit...".format(self.count)
@@ -189,12 +188,12 @@ def parse_file(filename, db_name, user, commit_interval, passwd=None):
         conn = MySQLdb.connect(user=user, passwd=passwd, use_unicode=False)
         #conn = mysql.connector.connect(user=user, password=passwd, use_unicode=False)
         try:
-            #init_db(conn, db_name)
+            init_db(conn, db_name)
             switch_to_db(conn, db_name)
-            reader = xml.sax.make_parser(["CustomExpatParser"])  # Creates ExpatParser instance
-            #reader.setContentHandler(FirstPassContentHandler(conn))
-            #reader.parse(infile)
-            #infile.seek(0)
+            reader = xml.sax.make_parser()  # Creates ExpatParser instance
+            reader.setContentHandler(FirstPassContentHandler(conn))
+            reader.parse(infile)
+            infile.seek(0)
             reader.setContentHandler(ContentHandler(conn, commit_interval))
             reader.parse(infile)
         finally:
