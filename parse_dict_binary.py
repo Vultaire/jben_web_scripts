@@ -29,13 +29,22 @@ class ExpatParserNoEntityExp(ExpatParser):
 
     def __init__(self, *args, **kwargs):
         ExpatParser.__init__(self, *args, **kwargs)
+        self.__entities = {}
 
     def reset(self):
         ExpatParser.reset(self)
         self._parser.DefaultHandler = self.__default_handler
+        self._parser.EntityDeclHandler = self.__entity_decl_handler
 
     def __default_handler(self, *args):
         pass
+
+    def __entity_decl_handler(self, entityName, is_parameter_entity, value,
+                              base, systemId, publicId, notationName):
+        self.__entities[entityName] = value
+
+    def get_entities(self):
+        return self.__entities
 
 
 class FirstPassContentHandler(xml.sax.handler.ContentHandler):
@@ -49,35 +58,39 @@ class FirstPassContentHandler(xml.sax.handler.ContentHandler):
         self.stack = []
         self.elem_len_d = {}
         self.attr_len_d = {}
-        self.fk_needed = set()
+        self.parent_d = {}
 
     def startDocument(self):
         print "Parsing file to determine data structure..."
 
     def startElement(self, name, attrs):
-        # Track whether we need a foreign key.
+        # Track whether the element has a parent.
         # Since we don't record docroot in the db, we check if the
         # stack has more than just docroot.  (i.e. > 1)
         if len(self.stack) > 1:
-            self.fk_needed.add(name)
+            parent_name = self.stack[-1]["name"]
+            if name in self.parent_d and self.parent_d[name] != parent_name:
+                raise Exception("Parent redefinition",
+                                self.parent_d[name], parent_name)
+            self.parent_d[name] = parent_name
 
-        self.stack.append("")
+        self.stack.append({"name": name, "data": ""})
         for k, v in attrs.items():
             self.attr_len_d.setdefault(name, {})
             self.attr_len_d[name][k] = max(len(v.encode("utf-8")), self.attr_len_d[name].get(k, 0))
 
     def endElement(self, name):
-        data = self.stack.pop()
+        record = self.stack.pop()
         # Again, not doing anything for docroot, so only do something
         # if docroot is still on the stack.
         if len(self.stack) > 0:
-            self.elem_len_d[name] = max(len(data.encode("utf-8")), self.elem_len_d.get(name, 0))
+            self.elem_len_d[name] = max(len(record["data"].encode("utf-8")), self.elem_len_d.get(name, 0))
 
     def characters(self, content):
-        self.stack[-1] += content.strip()
+        self.stack[-1]["data"] += content.strip()
 
     def skippedEntity(self, name):
-        self.stack[-1] += "&{0};".format(name)
+        self.stack[-1]["data"] += "&{0};".format(name)
 
     def endDocument(self):
         print "Creating database tables..."
@@ -85,7 +98,7 @@ class FirstPassContentHandler(xml.sax.handler.ContentHandler):
             # Create tables... *to do*
             for elem, data_len in self.elem_len_d.iteritems():
                 cols = ["id INTEGER AUTO_INCREMENT PRIMARY KEY"]
-                if elem in self.fk_needed:
+                if elem in self.parent_d:
                     cols.append("fk INTEGER")
                 else:
                     cols.append("json MEDIUMBLOB")
@@ -104,6 +117,23 @@ CREATE TABLE `{0}` (
                 except:
                     print query
                     raise
+            # Create relations table
+            create_query = """\
+CREATE TABLE `_parent` (
+    child VARCHAR({0}) PRIMARY KEY,
+    parent VARCHAR({1})
+) CHARACTER SET binary;""".format(
+                max(map(len, self.parent_d.iterkeys())),
+                max(map(len, self.parent_d.itervalues())),
+                )
+            insert_query = "INSERT INTO `_parent` VALUES (%s, %s)"
+            self.cursor.execute(create_query)
+            try:
+                for child, parent in self.parent_d.iteritems():
+                    self.cursor.execute(insert_query, (child, parent))
+                self.conn.commit()
+            except:
+                self.conn.rollback()
         finally:
             self.cursor.close()
 
@@ -207,6 +237,29 @@ def switch_to_db(conn, db_name):
     finally:
         cursor.close()
 
+def write_entities_table(conn, entities):
+    create_query = """\
+CREATE TABLE `_entity` (
+    id INTEGER AUTO_INCREMENT PRIMARY KEY,
+    entity VARBINARY({0}),
+    value VARBINARY({1})
+) CHARACTER SET binary;""".format(
+        max(map(len, entities.iterkeys())),
+        max(map(len, entities.itervalues())),
+        )
+    insert_query = "INSERT INTO `_entities` (entity, value) VALUES (%s, %s)"
+    cursor = conn.cursor()
+    try:
+        cursor.execute(create_query)
+        try:
+            for entity, value in entities.iteritems():
+                cursor.execute(insert_query, (entity, value))
+            conn.commit()
+        except:
+            conn.rollback()
+    finally:
+        cursor.close()
+
 def parse_file(filename, db_name, user, commit_interval, passwd=None):
     infile = gzip.open(filename) if filename.lower().endswith(".gz") else open(filename)
     with infile:
@@ -221,6 +274,11 @@ def parse_file(filename, db_name, user, commit_interval, passwd=None):
             reader = ExpatParserNoEntityExp()  # Substitute for make_parser() call, since I want to subclass the parser.
             reader.setContentHandler(FirstPassContentHandler(conn))
             reader.parse(infile)
+
+            entities = reader.get_entities()
+            if len(entities) > 0:
+                write_entities_table(conn, entities)
+
             infile.seek(0)
             reader.setContentHandler(ContentHandler(conn, commit_interval))
             reader.parse(infile)
