@@ -15,18 +15,26 @@ import xml.sax.handler
 import xml.sax.xmlreader
 
 
-# Custom expat parser...
+# Custom expat parser...  Based on
+# http://www.vultaire.net/blog/2009/07/20/python-snippet-sax-parser-with-internal-entity-expansion-disabled/.
+# (Thanks, me!  Guess I worked on this a lot awhile back and
+# forgot...)
 from xml.sax.expatreader import ExpatParser
+from xml.parsers import expat
+
 
 class ExpatParserNoEntityExp(ExpatParser):
 
     """An overridden Expat parser class which disables entity expansion."""
 
+    def __init__(self, *args, **kwargs):
+        ExpatParser.__init__(self, *args, **kwargs)
+
     def reset(self):
         ExpatParser.reset(self)
-        self._parser.DefaultHandler = self.dummy_handler
+        self._parser.DefaultHandler = self.__default_handler
 
-    def dummy_handler(self, *args, **kwargs):
+    def __default_handler(self, *args):
         pass
 
 
@@ -66,7 +74,7 @@ class FirstPassContentHandler(xml.sax.handler.ContentHandler):
             self.elem_len_d[name] = max(len(data) * 4, self.elem_len_d.get(name, 0))
 
     def characters(self, content):
-        self.stack[-1] = self.stack[-1] + content.strip()
+        self.stack[-1] += content.strip()
 
     def endDocument(self):
         print "Creating database tables..."
@@ -163,13 +171,15 @@ class ContentHandler(xml.sax.handler.ContentHandler):
             self.stack[-1].setdefault(name, []).append(record)
 
     def characters(self, content):
-        self.stack[-1]["_data"] = self.stack[-1]["_data"] + content.strip()
+        self.stack[-1]["_data"] += content.strip()
 
     def endDocument(self):
         print "Final commit...".format(self.count)
         self.conn.commit()
         self.cursor.close()
 
+    def skippedEntity(self, name):
+        self.stack[-1]["_data"] += "&{0};".format(name)
 
 import MySQLdb
 #import mysql.connector
@@ -205,7 +215,7 @@ def parse_file(filename, db_name, user, commit_interval, passwd=None):
         try:
             init_db(conn, db_name)
             switch_to_db(conn, db_name)
-            reader = xml.sax.make_parser(["ExpatParserNoEntityExp"])
+            reader = ExpatParserNoEntityExp()  # Substitute for make_parser() call, since I want to subclass the parser.
             reader.setContentHandler(FirstPassContentHandler(conn))
             reader.parse(infile)
             infile.seek(0)
