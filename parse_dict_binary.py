@@ -76,6 +76,9 @@ class FirstPassContentHandler(xml.sax.handler.ContentHandler):
     def characters(self, content):
         self.stack[-1] += content.strip()
 
+    def skippedEntity(self, name):
+        self.stack[-1] += "&{0};".format(name)
+
     def endDocument(self):
         print "Creating database tables..."
         try:
